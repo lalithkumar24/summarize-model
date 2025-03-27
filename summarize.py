@@ -1,30 +1,32 @@
 import os
-import sys
-import nltk
 from flask import Flask, request, jsonify
-from nltk.tokenize import sent_tokenize, word_tokenize
+import nltk
+import logging
 from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.probability import FreqDist
 from heapq import nlargest
 
-# Attempt to download NLTK resources with error handling
+# Ensure NLTK resources are downloaded
 try:
-    # Download only specific resources
     nltk.download('punkt', quiet=True)
     nltk.download('stopwords', quiet=True)
 except Exception as e:
     print(f"NLTK download error: {e}")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class TextSummarizer:
     def __init__(self):
         """
         Initialize the text summarizer
         """
-        try:
-            self.stop_words = set(stopwords.words('english'))
-        except Exception as e:
-            print(f"Stopwords loading error: {e}")
-            self.stop_words = set()
+        self.stop_words = set(stopwords.words('english'))
 
     def preprocess_text(self, text):
         """
@@ -35,7 +37,7 @@ class TextSummarizer:
             words = [word for word in words if word.isalnum() and word not in self.stop_words]
             return words
         except Exception as e:
-            print(f"Preprocessing error: {e}")
+            logger.error(f"Preprocessing error: {e}")
             return []
 
     def summarize(self, text, num_sentences=3):
@@ -70,7 +72,7 @@ class TextSummarizer:
             
             return summary
         except Exception as e:
-            print(f"Summarization error: {e}")
+            logger.error(f"Summarization error: {e}")
             return "Unable to generate summary"
 
 # Flask Application
@@ -100,6 +102,9 @@ def summarize_text():
         # Generate summary
         summary = summarizer.summarize(text, num_sentences)
         
+        # Log successful summarization
+        logger.info(f"Successfully summarized text (Length: {len(text)})")
+        
         # Return summary
         return jsonify({
             'original_text': text,
@@ -108,7 +113,8 @@ def summarize_text():
         })
     
     except Exception as e:
-        # Return error
+        # Log and return error
+        logger.error(f"Summarization error: {e}")
         return jsonify({
             'error': str(e),
             'status': 'failure'
@@ -125,13 +131,11 @@ def health_check():
         'version': '1.0.0'
     }), 200
 
+# For Railway deployment
 def create_app():
-    """
-    Create and configure Flask app
-    """
     return app
 
 if __name__ == '__main__':
-    # Determine port from environment variable or default
+    # Use PORT environment variable provided by Railway
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
