@@ -1,13 +1,14 @@
 import os
-from flask import Flask, request, jsonify
 import nltk
+from flask import Flask, request, jsonify
+from googletrans import Translator
 import logging
-from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
 from nltk.probability import FreqDist
 from heapq import nlargest
 
-# Ensure NLTK resources are downloaded
+# Download NLTK resources
 try:
     nltk.download('punkt', quiet=True)
     nltk.download('stopwords', quiet=True)
@@ -15,45 +16,91 @@ except Exception as e:
     print(f"NLTK download error: {e}")
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class TextSummarizer:
+class MultilingualSummarizer:
     def __init__(self):
         """
-        Initialize the text summarizer
+        Initialize multilingual summarizer with translator
         """
-        self.stop_words = set(stopwords.words('english'))
+        self.translator = Translator()
 
-    def preprocess_text(self, text):
+    def detect_language(self, text):
         """
-        Preprocess the input text by tokenizing and removing stop words
+        Detect language of the input text
         """
         try:
-            words = word_tokenize(text.lower())
-            words = [word for word in words if word.isalnum() and word not in self.stop_words]
-            return words
+            detection = self.translator.detect(text)
+            return detection.lang
         except Exception as e:
-            logger.error(f"Preprocessing error: {e}")
-            return []
+            logger.error(f"Language detection error: {e}")
+            return 'en'  # Default to English
 
-    def summarize(self, text, num_sentences=3):
+    def translate_text(self, text, target_lang='en'):
         """
-        Generate a summary of the text
+        Translate text to target language
         """
         try:
-            # Tokenize sentences
-            sentences = sent_tokenize(text)
+            translation = self.translator.translate(text, dest=target_lang)
+            return translation.text
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            return text
+
+    def get_stopwords(self, lang='english'):
+        """
+        Get stopwords for different languages
+        """
+        try:
+            # Mapping of language codes to NLTK stopwords
+            lang_map = {
+                'en': 'english',
+                'es': 'spanish',
+                'fr': 'french',
+                'de': 'german',
+                'it': 'italian',
+                'pt': 'portuguese',
+                'ru': 'russian'
+            }
+            
+            # Use English stopwords as default
+            nltk_lang = lang_map.get(lang, 'english')
+            return set(stopwords.words(nltk_lang))
+        except Exception as e:
+            logger.error(f"Stopwords error for {lang}: {e}")
+            return set()
+
+    def summarize(self, text, num_sentences=3, target_lang='en'):
+        """
+        Generate summary for multilingual text
+        """
+        try:
+            # Detect source language
+            source_lang = self.detect_language(text)
+            logger.info(f"Detected language: {source_lang}")
+
+            # Translate to English for processing if not already English
+            if source_lang != 'en':
+                translated_text = self.translate_text(text, 'en')
+            else:
+                translated_text = text
+
+            # Get appropriate stopwords
+            stop_words = self.get_stopwords(source_lang)
+
+            # Tokenize sentences and words
+            sentences = sent_tokenize(translated_text)
             
             # Handle short texts
             if len(sentences) <= num_sentences:
-                return text
-            
-            # Preprocess and get word frequencies
-            words = self.preprocess_text(text)
+                return translated_text
+
+            # Preprocess text
+            words = word_tokenize(translated_text.lower())
+            words = [word for word in words if word.isalnum() and word not in stop_words]
+
+            # Calculate word frequencies
             word_frequencies = FreqDist(words)
             
             # Score sentences
@@ -69,20 +116,32 @@ class TextSummarizer:
             # Get top sentences
             summary_sentences = nlargest(num_sentences, sentence_scores, key=sentence_scores.get)
             summary = ' '.join(summary_sentences)
-            
-            return summary
+
+            # Translate summary back to source language if needed
+            if source_lang != 'en':
+                summary = self.translate_text(summary, source_lang)
+
+            return {
+                'original_text': text,
+                'source_language': source_lang,
+                'summary': summary
+            }
+
         except Exception as e:
             logger.error(f"Summarization error: {e}")
-            return "Unable to generate summary"
+            return {
+                'error': str(e),
+                'status': 'failure'
+            }
 
 # Flask Application
 app = Flask(__name__)
-summarizer = TextSummarizer()
+summarizer = MultilingualSummarizer()
 
 @app.route('/summarize', methods=['POST'])
 def summarize_text():
     """
-    Endpoint to receive text and generate summary
+    Endpoint to receive multilingual text and generate summary
     """
     try:
         # Get JSON data from request
@@ -98,23 +157,16 @@ def summarize_text():
         # Extract text and optional parameters
         text = data['text']
         num_sentences = data.get('num_sentences', 3)
+        target_lang = data.get('target_language', 'en')
         
         # Generate summary
-        summary = summarizer.summarize(text, num_sentences)
-        
-        # Log successful summarization
-        logger.info(f"Successfully summarized text (Length: {len(text)})")
+        result = summarizer.summarize(text, num_sentences, target_lang)
         
         # Return summary
-        return jsonify({
-            'original_text': text,
-            'summary': summary,
-            'status': 'success'
-        })
+        return jsonify(result)
     
     except Exception as e:
-        # Log and return error
-        logger.error(f"Summarization error: {e}")
+        # Return error
         return jsonify({
             'error': str(e),
             'status': 'failure'
@@ -127,15 +179,17 @@ def health_check():
     """
     return jsonify({
         'status': 'healthy',
-        'service': 'NLTK Text Summarizer',
+        'service': 'Multilingual Text Summarizer',
         'version': '1.0.0'
     }), 200
 
-# For Railway deployment
 def create_app():
+    """
+    Create and configure Flask app
+    """
     return app
 
 if __name__ == '__main__':
-    # Use PORT environment variable provided by Railway
+    # Determine port from environment variable or default
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
