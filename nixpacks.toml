@@ -10,7 +10,7 @@ cmds = [
 ]
 
 [start]
-cmd = "python app.py"
+cmd = "python summarize.py"
 
 [variables]
 PYTHONUNBUFFERED = "1"
