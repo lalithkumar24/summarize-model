@@ -1,6 +1,6 @@
 # Specify the Python runtime using Nixpacks
 [phases.setup]
-nixpkgs = ["python39"]  # Use Python 3.9 (or update as needed)
+nixpkgs = ["python39","pip"]  # Use Python 3.9 (or update as needed)
 
 [phases.install]
 cmds = [
@@ -14,7 +14,7 @@ cmd = "gunicorn -w 4 -b 0.0.0.0:8080 summarize:app"
 # Environment variables
 [env]
 PORT = "8080"
-FLASK_ENV = "production"
+FLASK_ENV = "productio"
 PYTHONUNBUFFERED = "1"
 NLTK_DATA = "/app/nltk_data"  # Use existing nltk_data folder
 
