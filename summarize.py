@@ -1,33 +1,30 @@
 import os
+import sys
 import nltk
-import requests
 from flask import Flask, request, jsonify
-from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
 from nltk.probability import FreqDist
 from heapq import nlargest
-import logging
 
-# Ensure NLTK resources are downloaded
+# Attempt to download NLTK resources with error handling
 try:
+    # Download only specific resources
     nltk.download('punkt', quiet=True)
     nltk.download('stopwords', quiet=True)
 except Exception as e:
     print(f"NLTK download error: {e}")
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 class TextSummarizer:
     def __init__(self):
         """
         Initialize the text summarizer
         """
-        self.stop_words = set(stopwords.words('english'))
+        try:
+            self.stop_words = set(stopwords.words('english'))
+        except Exception as e:
+            print(f"Stopwords loading error: {e}")
+            self.stop_words = set()
 
     def preprocess_text(self, text):
         """
@@ -38,7 +35,7 @@ class TextSummarizer:
             words = [word for word in words if word.isalnum() and word not in self.stop_words]
             return words
         except Exception as e:
-            logger.error(f"Preprocessing error: {e}")
+            print(f"Preprocessing error: {e}")
             return []
 
     def summarize(self, text, num_sentences=3):
@@ -73,7 +70,7 @@ class TextSummarizer:
             
             return summary
         except Exception as e:
-            logger.error(f"Summarization error: {e}")
+            print(f"Summarization error: {e}")
             return "Unable to generate summary"
 
 # Flask Application
@@ -103,9 +100,6 @@ def summarize_text():
         # Generate summary
         summary = summarizer.summarize(text, num_sentences)
         
-        # Log successful summarization
-        logger.info(f"Successfully summarized text (Length: {len(text)})")
-        
         # Return summary
         return jsonify({
             'original_text': text,
@@ -114,8 +108,7 @@ def summarize_text():
         })
     
     except Exception as e:
-        # Log and return error
-        logger.error(f"Summarization error: {e}")
+        # Return error
         return jsonify({
             'error': str(e),
             'status': 'failure'
