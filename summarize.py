@@ -1,8 +1,12 @@
 import os
-import logging
+import nltk
 from flask import Flask, request, jsonify
-from transformers import pipeline
 from googletrans import Translator
+import logging
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
+from nltk.probability import FreqDist
+from heapq import nlargest
 
 # Configure logging
 logging.basicConfig(
@@ -10,37 +14,123 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Hugging Face summarization model
-summarization_pipeline = pipeline("summarization", model="facebook/bart-large-cnn")
-translator = Translator()
+# Configure NLTK data path using current directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+nltk.data.path.append(os.path.join(current_dir, "nltk_data"))
+
+# Download required NLTK resources
+try:
+    nltk.download("punkt")
+    nltk.download("stopwords")
+except Exception as e:
+    logger.error(f"Failed to download NLTK resources: {e}")
 
 
-class NLPProcessor:
-    """Handles summarization and translation tasks"""
+class MultilingualSummarizer:
+    def __init__(self):
+        self.translator = Translator()
 
-    def summarize(self, text, min_length=50, max_length=150):
-        """Summarizes a given text using a Transformer model"""
+    def detect_language(self, text):
+        """Detect language of the input text"""
         try:
-            logger.info("Summarizing text...")
-            summary = summarization_pipeline(
-                text, min_length=min_length, max_length=max_length
-            )
-            return summary[0]["summary_text"]
+            return self.translator.detect(text).lang
         except Exception as e:
-            logger.error(f"Summarization error: {e}")
-            return None
+            logger.error(f"Language detection error: {e}")
+            return "en"  # Default to English
 
-    def translate(self, text, target_lang="en"):
-        """Translates text to the target language"""
+    def translate_text(self, text, target_lang="en"):
+        """Translate text to target language"""
         try:
-            return translator.translate(text, dest=target_lang).text
+            translation = self.translator.translate(text, dest=target_lang)
+            return translation.text
         except Exception as e:
             logger.error(f"Translation error: {e}")
-            return None
+            return text  # Return original text if translation fails
+
+    def get_stopwords(self, lang="english"):
+        """Retrieve stopwords for a given language"""
+        lang_map = {
+            "en": "english",
+            "es": "spanish",
+            "fr": "french",
+            "de": "german",
+            "it": "italian",
+            "pt": "portuguese",
+            "ru": "russian",
+        }
+        try:
+            return set(stopwords.words(lang_map.get(lang, "english")))
+        except Exception as e:
+            logger.error(f"Stopwords error for {lang}: {e}")
+            return set()
+
+    def summarize(self, text, num_sentences=3, target_lang="en"):
+        """Generate a summary of multilingual text"""
+        try:
+            if not text or not isinstance(text, str):
+                return {"error": "Invalid input text", "status": "failure"}
+
+            # Detect source language
+            source_lang = self.detect_language(text)
+            logger.info(f"Detected language: {source_lang}")
+
+            # Translate text to English for processing if needed
+            translated_text = (
+                text if source_lang == "en" else self.translate_text(text, "en")
+            )
+
+            # Tokenize sentences
+            sentences = sent_tokenize(translated_text)
+            if len(sentences) <= num_sentences:
+                return {
+                    "original_text": text,
+                    "source_language": source_lang,
+                    "summary": translated_text,
+                }
+
+            # Preprocess words
+            stop_words = self.get_stopwords(source_lang)
+            words = [
+                word
+                for word in word_tokenize(translated_text.lower())
+                if word.isalnum() and word not in stop_words
+            ]
+
+            # Compute word frequencies
+            word_frequencies = FreqDist(words)
+
+            # Score sentences
+            sentence_scores = {
+                sentence: sum(
+                    word_frequencies.get(word, 0)
+                    for word in word_tokenize(sentence.lower())
+                )
+                for sentence in sentences
+            }
+
+            # Select top sentences
+            summary = " ".join(
+                nlargest(num_sentences, sentence_scores, key=sentence_scores.get)
+            )
+
+            # Translate summary back if needed
+            if source_lang != "en":
+                summary = self.translate_text(summary, source_lang)
+
+            return {
+                "original_text": text,
+                "source_language": source_lang,
+                "summary": summary,
+            }
+
+        except Exception as e:
+            logger.error(f"Summarization error: {e}")
+            return {"error": str(e), "status": "failure"}
 
 
+# Flask Application
 app = Flask(__name__)
-nlp_processor = NLPProcessor()
+summarizer = MultilingualSummarizer()
 
 
 @app.route("/", methods=["POST"])
@@ -48,6 +138,7 @@ def handle_request():
     """Unified endpoint for OpenServ"""
     try:
         data = request.get_json()
+
         if not data or "workspace" not in data or "goal" not in data["workspace"]:
             return (
                 jsonify({"error": "Invalid request format", "status": "failure"}),
@@ -64,10 +155,9 @@ def handle_request():
             )
 
         if task == "summarize":
-            result = nlp_processor.summarize(extracted_text)
+            result = summarizer.summarize(extracted_text)
         elif task == "translate":
-            target_lang = data.get("target_lang", "en")
-            result = nlp_processor.translate(extracted_text, target_lang)
+            result = handle_translation(extracted_text, data)
         else:
             return jsonify({"error": "Unsupported task", "status": "failure"}), 400
 
@@ -91,13 +181,43 @@ def parse_goal(goal):
     elif "translate" in goal.lower():
         task = "translate"
     else:
-        return None, None
+        return None, None  # No valid task detected
 
+    # Extract quoted text if available
     start = goal.find(":")
     if start != -1:
         extracted_text = goal[start + 1 :].strip()
         return task, extracted_text
     return None, None
+
+
+def handle_translation(text, data):
+    """Handles translation using OpenServ's expected format"""
+    try:
+        curr_lang = data.get("curr_lang", "en")
+        target_lang = data.get("target_lang", "en")
+
+        if not curr_lang or not target_lang:
+            return {"error": "Missing language fields", "status": "failure"}
+
+        detected_lang = summarizer.detect_language(text)
+        if detected_lang != curr_lang:
+            return {
+                "error": f"Detected language '{detected_lang}' does not match provided '{curr_lang}'",
+                "status": "failure",
+            }
+
+        translated_text = summarizer.translate_text(text, target_lang)
+        return {
+            "original_text": text,
+            "translated_text": translated_text,
+            "source_language": curr_lang,
+            "target_language": target_lang,
+            "status": "success",
+        }
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        return {"error": str(e), "status": "failure"}
 
 
 if __name__ == "__main__":
