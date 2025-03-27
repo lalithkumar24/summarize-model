@@ -8,16 +8,35 @@ from nltk.corpus import stopwords
 from nltk.probability import FreqDist
 from heapq import nlargest
 
-# Download NLTK resources
-try:
-    nltk.download("punkt", quiet=True)
-    nltk.download("stopwords", quiet=True)
-except Exception as e:
-    print(f"NLTK download error: {e}")
-
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
+
+# Set up NLTK data path
+nltk_data_path = os.path.join(os.getcwd(), "nltk_data")
+os.makedirs(nltk_data_path, exist_ok=True)
+nltk.data.path.append(nltk_data_path)
+
+
+def download_nltk_resources():
+    """
+    Download NLTK resources with comprehensive error handling
+    """
+    try:
+        # Attempt to download resources
+        nltk.download("punkt", download_dir=nltk_data_path)
+        nltk.download("stopwords", download_dir=nltk_data_path)
+        logger.info(f"NLTK resources downloaded to {nltk_data_path}")
+        return True
+    except Exception as e:
+        logger.error(f"NLTK download failed: {e}")
+        return False
+
+
+# Attempt to download resources during import
+download_nltk_resources()
 
 
 class MultilingualSummarizer:
@@ -77,6 +96,10 @@ class MultilingualSummarizer:
         Generate summary for multilingual text
         """
         try:
+            # Validate input
+            if not text or not isinstance(text, str):
+                return {"error": "Invalid input text", "status": "failure"}
+
             # Detect source language
             source_lang = self.detect_language(text)
             logger.info(f"Detected language: {source_lang}")
@@ -95,7 +118,11 @@ class MultilingualSummarizer:
 
             # Handle short texts
             if len(sentences) <= num_sentences:
-                return translated_text
+                return {
+                    "original_text": text,
+                    "source_language": source_lang,
+                    "summary": translated_text,
+                }
 
             # Preprocess text
             words = word_tokenize(translated_text.lower())
@@ -168,6 +195,7 @@ def summarize_text():
 
     except Exception as e:
         # Return error
+        logger.error(f"API endpoint error: {e}")
         return jsonify({"error": str(e), "status": "failure"}), 500
 
 
@@ -181,7 +209,8 @@ def health_check():
             {
                 "status": "healthy",
                 "service": "Multilingual Text Summarizer",
-                "version": "1.0.0",
+                "version": "1.1.0",
+                "nltk_data_path": nltk_data_path,
             }
         ),
         200,
@@ -190,7 +219,7 @@ def health_check():
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Hello, Flask in Production!"
+    return "Multilingual Text Summarizer API is running!"
 
 
 def create_app():
